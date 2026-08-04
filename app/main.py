@@ -1,10 +1,13 @@
 from fastapi import FastAPI
+from app.routers import audio
 
 app = FastAPI(
-    title="API Support Client - Diagnostic Multimodal",
-    description="Micro-service d'analyse automatique de réclamations avec Whisper, ViT et RAG",
+    title="Micro-service de Support Client Multimodal",
     version="1.0.0"
 )
+
+# Ingestion des routeurs
+app.include_router(audio.router)
 
 @app.get("/health", tags=["Health Check"])
 def health_check():
