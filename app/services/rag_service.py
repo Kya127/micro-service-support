@@ -3,7 +3,7 @@ from langchain_community.vectorstores import Chroma
 from langchain_community.retrievers import BM25Retriever
 from langchain_classic.retrievers import EnsembleRetriever
 from langchain_openai import ChatOpenAI
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
@@ -33,41 +33,41 @@ SECTION 4 : RÈGLES GÉNÉRALES DE REFUS (HORS CADRE)
 """
 
 class RAGService:
-    def __init__(self, model_name: str = "gpt-4o-mini"):
-        # Plus de data_folder ici, juste le nom du modèle
-        self.model_name = model_name
-        self.rag_chain = None
+    _instance = None
+
+    def __new__(cls, model_name: str = "gpt-4o-mini"):
+        # Pattern Singleton : s'assure qu'une seule instance existe en mémoire
+        if cls._instance is None:
+            cls._instance = super(RAGService, cls).__new__(cls)
+            cls._instance.model_name = model_name
+            cls._instance.rag_chain = None
+            cls._instance.initialize()
+        return cls._instance
 
     def initialize(self):
         print("\n⏳ Initialisation du moteur RAG Hybride SmartHelp...")
         
-        # 1. Création du document unique à partir de la variable texte
         policy_document = Document(
             page_content=SMARTHELP_POLICY,
             metadata={"source": "politique_smarthelp.txt"}
         )
         documents = [policy_document]
 
-        # 2. Découpage du texte en Chunks
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=150)
         splits = text_splitter.split_documents(documents)
 
-        # 3. Retriever Vectoriel (ChromaDB + Embeddings HuggingFace)
         embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
         vectorstore = Chroma.from_documents(documents=splits, embedding=embeddings)
         vector_retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 
-        # 4. Retriever par Mots-Clés (BM25)
         bm25_retriever = BM25Retriever.from_documents(splits)
         bm25_retriever.k = 3
 
-        # 5. Retriever Hybride (Ensemble)
         ensemble_retriever = EnsembleRetriever(
             retrievers=[bm25_retriever, vector_retriever],
             weights=[0.5, 0.5]
         )
 
-        # 6. LLM et Prompt Template
         llm = ChatGroq(model_name="llama-3.3-70b-versatile", temperature=0)
 
         prompt_template = """Tu es une assistante expert spécialisée dans la politique de support et de retour SmartHelp.
@@ -91,7 +91,6 @@ Réponse:"""
         def format_docs(docs):
             return "\n\n".join(doc.page_content for doc in docs)
 
-        # 7. Assemblage de la chaîne RAG
         self.rag_chain = (
             {"context": ensemble_retriever | format_docs, "question": RunnablePassthrough()}
             | prompt
