@@ -1,0 +1,106 @@
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import Chroma
+from langchain_community.retrievers import BM25Retriever
+from langchain_classic.retrievers import EnsembleRetriever
+from langchain_openai import ChatOpenAI
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.documents import Document
+from langchain_groq import ChatGroq
+
+# Base de connaissances SmartHelp intégrée directement
+SMARTHELP_POLICY = """
+BASE DE CONNAISSANCES INTERNE - POLITIQUE DE SUPPORT ET DE RETOUR (SMARTHELP)
+
+SECTION 1 : PRODUITS ENDOMMAGÉS OU CASSÉS À LA LIVRAISON
+- Règle 1.1 (Casse / Dommage visible) : Si le client signale un produit cassé, fissuré ou endommagé, et fournit une photo probante de l'article dans un délai de 48 heures suivant la réception, le dossier est éligible à un remboursement intégral ou à un renvoi gratuit. Statut associé : "Remboursable".
+- Règle 1.2 (Délai dépassé) : Si la réclamation pour produit cassé est faite après un délai de 48 heures, la demande est soumise à validation manuelle du manager. Statut associé : "À vérifier".
+
+SECTION 2 : ERREURS DE LIVRAISON ET NON-CONFORMITÉ DE COMMANDE
+- Règle 2.1 (Mauvais article reçu) : Si le produit reçu ne correspond pas en termes de modèle, de couleur ou de taille par rapport à la commande initiale, l'échange est entièrement pris en charge par l'entreprise (frais de retour offerts). Statut associé : "Échange gratuit".
+- Règle 2.2 (Pièce manquante) : Si un accessoire ou une pièce d'un kit est manquant à la réception, l'entreprise s'engage à expédier uniquement la pièce manquante sous 3 jours ouvrés. Statut associé : "Expédition de pièce".
+
+SECTION 3 : RETARDS DE LIVRAISON ET PROBLÈMES LOGISTIQUES
+- Règle 3.1 (Retard mineur) : Un retard de livraison inférieur ou égal à 3 jours ouvrés par rapport à la date estimée ne donne droit à aucun dédommagement financier. Statut associé : "Non remboursable - Retard mineur".
+- Règle 3.2 (Retard majeur) : Un retard supérieur à 5 jours ouvrés donne droit à un bon d'achat de 10% valable sur la prochaine commande. Statut associé : "Dédommagement 10%".
+- Règle 3.3 (Colis perdu) : Si le statut du transporteur indique "Bloqué" ou "Perdu" depuis plus de 7 jours, un remboursement total est déclenché automatiquement après enquête transporteur. Statut associé : "Remboursable - Colis perdu".
+
+SECTION 4 : RÈGLES GÉNÉRALES DE REFUS (HORS CADRE)
+- Règle 4.1 (Usure normale / Mauvaise utilisation) : Si l'analyse visuelle ou la description audio montre que le défaut est dû à une mauvaise manipulation du client, à une chute après réception ou à une usure normale, la réclamation est rejetée. Statut associé : "Refusé".
+- Règle 4.2 (Absence de preuve) : Toute réclamation concernant un produit endommagé ou non conforme qui ne comporte ni photo probante ni description claire par message vocal sera mise en attente de pièces complémentaires. Statut associé : "En attente de justificatifs".
+"""
+
+class RAGService:
+    def __init__(self, model_name: str = "gpt-4o-mini"):
+        # Plus de data_folder ici, juste le nom du modèle
+        self.model_name = model_name
+        self.rag_chain = None
+
+    def initialize(self):
+        print("\n⏳ Initialisation du moteur RAG Hybride SmartHelp...")
+        
+        # 1. Création du document unique à partir de la variable texte
+        policy_document = Document(
+            page_content=SMARTHELP_POLICY,
+            metadata={"source": "politique_smarthelp.txt"}
+        )
+        documents = [policy_document]
+
+        # 2. Découpage du texte en Chunks
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=150)
+        splits = text_splitter.split_documents(documents)
+
+        # 3. Retriever Vectoriel (ChromaDB + Embeddings HuggingFace)
+        embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        vectorstore = Chroma.from_documents(documents=splits, embedding=embeddings)
+        vector_retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+
+        # 4. Retriever par Mots-Clés (BM25)
+        bm25_retriever = BM25Retriever.from_documents(splits)
+        bm25_retriever.k = 3
+
+        # 5. Retriever Hybride (Ensemble)
+        ensemble_retriever = EnsembleRetriever(
+            retrievers=[bm25_retriever, vector_retriever],
+            weights=[0.5, 0.5]
+        )
+
+        # 6. LLM et Prompt Template
+        llm = ChatGroq(model_name="llama-3.3-70b-versatile", temperature=0)
+
+        prompt_template = """Tu es une assistante expert spécialisée dans la politique de support et de retour SmartHelp.
+Tu dois répondre aux questions en te basant UNIQUEMENT sur le contexte fourni ci-dessous.
+
+Règles de réponse :
+1. Si l'utilisateur salue ou entame la conversation, accueille-le poliment .
+2. Lorsqu'un cas client ou une réclamation est décrit, identifie précisément la règle applicable et mentionne TOUJOURS le statut associé apres avoir fait un bref résumé de la situation (ex: "Remboursable", "À vérifier", "Échange gratuit", "Refusé", etc.).
+3. Si la réponse n'est pas présente dans le contexte, indique poliment que l'information n'est pas disponible dans le règlement intérieur.
+
+Contexte:
+{context}
+
+Question:
+{question}
+
+Réponse:"""
+
+        prompt = ChatPromptTemplate.from_template(prompt_template)
+
+        def format_docs(docs):
+            return "\n\n".join(doc.page_content for doc in docs)
+
+        # 7. Assemblage de la chaîne RAG
+        self.rag_chain = (
+            {"context": ensemble_retriever | format_docs, "question": RunnablePassthrough()}
+            | prompt
+            | llm
+            | StrOutputParser()
+        )
+        print("✅ Moteur RAG Hybride SmartHelp prêt !\n")
+
+    def query(self, question: str) -> str:
+        if self.rag_chain is None:
+            raise RuntimeError("Le service RAG n'est pas encore initialisé.")
+        return self.rag_chain.invoke(question)

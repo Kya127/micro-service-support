@@ -1,10 +1,31 @@
+# fastapi
+# uvicorn
+# pydantic
+# python-multipart
+# torch
+# transformers
+# sentence-transformers
+# faiss-cpu
+# pillow
+# soundfile
+# --- Serveur & API ---
 fastapi
 uvicorn
 pydantic
 python-multipart
+python-dotenv
+
+# --- IA Multimodale (Audio & Vision) ---
 torch
 transformers
-sentence-transformers
-faiss-cpu
 pillow
 soundfile
+
+# --- RAG & LangChain ---
+langchain
+langchain-community
+langchain-openai
+sentence-transformers
+chromadb
+rank-bm25
+langchain-groq
