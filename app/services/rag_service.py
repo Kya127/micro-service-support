@@ -9,6 +9,7 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.documents import Document
 from langchain_groq import ChatGroq
+import json
 
 # Base de connaissances SmartHelp intégrée directement
 SMARTHELP_POLICY = """
@@ -46,7 +47,7 @@ class RAGService:
 
     def initialize(self):
         print("\n⏳ Initialisation du moteur RAG Hybride SmartHelp...")
-        
+
         policy_document = Document(
             page_content=SMARTHELP_POLICY,
             metadata={"source": "politique_smarthelp.txt"}
@@ -69,14 +70,30 @@ class RAGService:
         )
 
         llm = ChatGroq(model_name="llama-3.3-70b-versatile", temperature=0)
-
         prompt_template = """Tu es une assistante expert spécialisée dans la politique de support et de retour SmartHelp.
 Tu dois répondre aux questions en te basant UNIQUEMENT sur le contexte fourni ci-dessous.
 
 Règles de réponse :
-1. Si l'utilisateur salue ou entame la conversation, accueille-le poliment .
-2. Lorsqu'un cas client ou une réclamation est décrit, identifie précisément la règle applicable et mentionne TOUJOURS le statut associé apres avoir fait un bref résumé de la situation (ex: "Remboursable", "À vérifier", "Échange gratuit", "Refusé", etc.).
-3. Si la réponse n'est pas présente dans le contexte, indique poliment que l'information n'est pas disponible dans le règlement intérieur.
+1. Si l'utilisateur salue ou entame la conversation, accueille-le poliment.
+2. Si l'utilisateur te remercie ou clôture la conversation (ex: "merci", "d'accord", "parfait"), réponds simplement par une formule de politesse brève (ex: "Avec plaisir, n'hésitez pas si vous avez d'autres questions !, A bientot!"), SANS redemander de détails ni répéter un message d'accueil.
+3. Lorsqu'un cas client ou une réclamation est décrit, identifie précisément la règle applicable et mentionne TOUJOURS le statut associé après avoir fait un bref résumé de la situation.
+4. Si la réponse n'est pas présente dans le contexte, indique poliment que l'information n'est pas disponible dans le règlement intérieur.
+
+IMPORTANT — Format de sortie obligatoire :
+Tu dois TOUJOURS répondre avec un objet JSON valide, et rien d'autre autour (pas de texte avant ou après, pas de balises markdown ```json) hormis les messages de salutations ou de remerciements.
+Structure attendue :
+
+{{
+  "reponse": "<ta réponse habituelle, rédigée pour le client, en français>",
+  "analyse": {{
+    "Type de dommage": "<type de dommage identifié, ou néant si non applicable>",
+    "confiance": <un nombre entre 0 et 100 représentant ta confiance dans le diagnostic>,
+    "Dégat": "<Faible, Moyenne ou Élevée, ou néant si non applicable>",
+    "Recommandation": "<action recommandée en une courte phrase, ou null si non applicable>"
+  }}
+}}
+
+Si la situation ne concerne pas une réclamation avec un dommage identifiable (ex: simple salutation, question générale), mets "analyse": null.
 
 Contexte:
 {context}
@@ -84,7 +101,7 @@ Contexte:
 Question:
 {question}
 
-Réponse:"""
+Réponse (JSON uniquement):"""
 
         prompt = ChatPromptTemplate.from_template(prompt_template)
 
@@ -99,7 +116,22 @@ Réponse:"""
         )
         print("✅ Moteur RAG Hybride SmartHelp prêt !\n")
 
-    def query(self, question: str) -> str:
+    def parse_structured_response(self, raw_text: str) -> dict:
+        """Transforme le texte JSON renvoyé par le modèle en dictionnaire Python.
+        Si jamais le modèle ne respecte pas le format, on retombe sur une
+        réponse simple en texte, sans planter l'application."""
+        try:
+            cleaned = raw_text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            parsed = json.loads(cleaned)
+            return {
+                "response": parsed.get("reponse", raw_text),
+                "analysis": parsed.get("analyse", None)
+            }
+        except (json.JSONDecodeError, AttributeError):
+            return {"response": raw_text, "analysis": None}
+
+    def query(self, question: str) -> dict:
         if self.rag_chain is None:
             raise RuntimeError("Le service RAG n'est pas encore initialisé.")
-        return self.rag_chain.invoke(question)
+        raw_text = self.rag_chain.invoke(question)
+        return self.parse_structured_response(raw_text)

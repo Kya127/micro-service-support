@@ -21,10 +21,11 @@ def startup_event():
 @router.post("/chat")
 def chat_endpoint(request: QuestionRequest):
     try:
-        response_text = rag_service.query(request.question)
+        result = rag_service.query(request.question)
         return {
             "question": request.question,
-            "response": response_text
+            "response": result["response"],
+            "analysis": result["analysis"]
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

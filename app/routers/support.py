@@ -52,7 +52,8 @@ async def process_support_ticket(
                 "transcription_audio": extracted_text_from_audio,
                 "diagnostic_visuel": image_description
             },
-            "synthese_rag": rag_response
+            "synthese_rag": rag_response["response"],
+            "analyse": rag_response["analysis"]
         }
 
     except Exception as e:
