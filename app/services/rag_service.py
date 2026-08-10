@@ -114,7 +114,7 @@ Réponse (JSON uniquement):"""
             | llm
             | StrOutputParser()
         )
-        print("✅ Moteur RAG Hybride SmartHelp prêt !\n")
+        print("Moteur RAG Hybride SmartHelp prêt !\n")
 
     def parse_structured_response(self, raw_text: str) -> dict:
         """Transforme le texte JSON renvoyé par le modèle en dictionnaire Python.
